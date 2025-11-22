@@ -7,39 +7,14 @@ use serde::{Deserialize, Serialize};
 use super::{AuthorizingIntegrationOwners, InteractionContext};
 #[cfg(feature = "model")]
 use crate::builder::{
-    Builder,
     CreateInteractionResponse,
     CreateInteractionResponseFollowup,
     CreateInteractionResponseMessage,
     EditInteractionResponse,
 };
-#[cfg(feature = "collector")]
-use crate::client::Context;
 #[cfg(feature = "model")]
-use crate::http::{CacheHttp, Http};
-use crate::internal::prelude::*;
-use crate::json::{self, JsonError};
-use crate::model::application::{CommandOptionType, CommandType};
-use crate::model::channel::{Attachment, Message, PartialChannel};
-use crate::model::guild::{Member, PartialMember, Role};
-use crate::model::id::{
-    ApplicationId,
-    AttachmentId,
-    ChannelId,
-    CommandId,
-    GenericId,
-    GuildId,
-    InteractionId,
-    MessageId,
-    RoleId,
-    TargetId,
-    UserId,
-};
-use crate::model::monetization::Entitlement;
-use crate::model::user::User;
-use crate::model::Permissions;
-#[cfg(all(feature = "collector", feature = "utils"))]
-use crate::utils::{CreateQuickModal, QuickModalResponse};
+use crate::http::Http;
+use crate::model::prelude::*;
 
 /// An interaction when a user invokes a slash command.
 ///
@@ -59,9 +34,9 @@ pub struct CommandInteraction {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guild_id: Option<GuildId>,
     /// Channel that the interaction was sent from.
-    pub channel: Option<PartialChannel>,
+    pub channel: Option<GenericInteractionChannel>,
     /// The channel Id this interaction was sent from.
-    pub channel_id: ChannelId,
+    pub channel_id: GenericChannelId,
     /// The `member` data for the invoking user.
     ///
     /// **Note**: It is only present if the interaction is triggered in a guild.
@@ -71,16 +46,15 @@ pub struct CommandInteraction {
     #[serde(default)]
     pub user: User,
     /// A continuation token for responding to the interaction.
-    pub token: String,
+    pub token: FixedString,
     /// Always `1`.
     pub version: u8,
     /// Permissions the app or bot has within the channel the interaction was sent from.
-    // TODO(next): This is now always serialized.
-    pub app_permissions: Option<Permissions>,
+    pub app_permissions: Permissions,
     /// The selected language of the invoking user.
-    pub locale: String,
+    pub locale: FixedString,
     /// The guild's preferred locale.
-    pub guild_locale: Option<String>,
+    pub guild_locale: Option<FixedString>,
     /// For monetized applications, any entitlements of the invoking user.
     pub entitlements: Vec<Entitlement>,
     /// The owners of the applications that authorized the interaction, such as a guild or user.
@@ -97,8 +71,8 @@ impl CommandInteraction {
     /// # Errors
     ///
     /// Returns an [`Error::Http`] if there is no interaction response.
-    pub async fn get_response(&self, http: impl AsRef<Http>) -> Result<Message> {
-        http.as_ref().get_original_interaction_response(&self.token).await
+    pub async fn get_response(&self, http: &Http) -> Result<Message> {
+        http.get_original_interaction_response(&self.token).await
     }
 
     /// Creates a response to the interaction received.
@@ -112,10 +86,10 @@ impl CommandInteraction {
     /// deserializing the API response.
     pub async fn create_response(
         &self,
-        cache_http: impl CacheHttp,
-        builder: CreateInteractionResponse,
+        http: &Http,
+        builder: CreateInteractionResponse<'_>,
     ) -> Result<()> {
-        builder.execute(cache_http, (self.id, &self.token)).await
+        builder.execute(http, self.id, &self.token).await
     }
 
     /// Edits the initial interaction response.
@@ -129,10 +103,10 @@ impl CommandInteraction {
     /// deserializing the API response.
     pub async fn edit_response(
         &self,
-        cache_http: impl CacheHttp,
-        builder: EditInteractionResponse,
+        http: &Http,
+        builder: EditInteractionResponse<'_>,
     ) -> Result<Message> {
-        builder.execute(cache_http, &self.token).await
+        builder.execute(http, &self.token).await
     }
 
     /// Deletes the initial interaction response.
@@ -143,8 +117,8 @@ impl CommandInteraction {
     ///
     /// May return [`Error::Http`] if the API returns an error. Such as if the response was already
     /// deleted.
-    pub async fn delete_response(&self, http: impl AsRef<Http>) -> Result<()> {
-        http.as_ref().delete_original_interaction_response(&self.token).await
+    pub async fn delete_response(&self, http: &Http) -> Result<()> {
+        http.delete_original_interaction_response(&self.token).await
     }
 
     /// Creates a followup response to the response sent.
@@ -158,10 +132,10 @@ impl CommandInteraction {
     /// response.
     pub async fn create_followup(
         &self,
-        cache_http: impl CacheHttp,
-        builder: CreateInteractionResponseFollowup,
+        http: &Http,
+        builder: CreateInteractionResponseFollowup<'_>,
     ) -> Result<Message> {
-        builder.execute(cache_http, (None, &self.token)).await
+        builder.execute(http, None, &self.token).await
     }
 
     /// Edits a followup response to the response sent.
@@ -175,11 +149,11 @@ impl CommandInteraction {
     /// response.
     pub async fn edit_followup(
         &self,
-        cache_http: impl CacheHttp,
-        message_id: impl Into<MessageId>,
-        builder: CreateInteractionResponseFollowup,
+        http: &Http,
+        message_id: MessageId,
+        builder: CreateInteractionResponseFollowup<'_>,
     ) -> Result<Message> {
-        builder.execute(cache_http, (Some(message_id.into()), &self.token)).await
+        builder.execute(http, Some(message_id), &self.token).await
     }
 
     /// Deletes a followup message.
@@ -188,12 +162,8 @@ impl CommandInteraction {
     ///
     /// May return [`Error::Http`] if the API returns an error. Such as if the response was already
     /// deleted.
-    pub async fn delete_followup<M: Into<MessageId>>(
-        &self,
-        http: impl AsRef<Http>,
-        message_id: M,
-    ) -> Result<()> {
-        http.as_ref().delete_followup_message(&self.token, message_id.into()).await
+    pub async fn delete_followup(&self, http: &Http, message_id: MessageId) -> Result<()> {
+        http.delete_followup_message(&self.token, message_id).await
     }
 
     /// Gets a followup message.
@@ -202,12 +172,8 @@ impl CommandInteraction {
     ///
     /// May return [`Error::Http`] if the API returns an error. Such as if the response was
     /// deleted.
-    pub async fn get_followup<M: Into<MessageId>>(
-        &self,
-        http: impl AsRef<Http>,
-        message_id: M,
-    ) -> Result<Message> {
-        http.as_ref().get_followup_message(&self.token, message_id.into()).await
+    pub async fn get_followup(&self, http: &Http, message_id: MessageId) -> Result<Message> {
+        http.get_followup_message(&self.token, message_id).await
     }
 
     /// Helper function to defer an interaction.
@@ -216,9 +182,9 @@ impl CommandInteraction {
     ///
     /// Returns an [`Error::Http`] if the API returns an error, or an [`Error::Json`] if there is
     /// an error in deserializing the API response.
-    pub async fn defer(&self, cache_http: impl CacheHttp) -> Result<()> {
+    pub async fn defer(&self, http: &Http) -> Result<()> {
         let builder = CreateInteractionResponse::Defer(CreateInteractionResponseMessage::default());
-        self.create_response(cache_http, builder).await
+        self.create_response(http, builder).await
     }
 
     /// Helper function to defer an interaction ephemerally
@@ -227,25 +193,11 @@ impl CommandInteraction {
     ///
     /// May also return an [`Error::Http`] if the API returns an error, or an [`Error::Json`] if
     /// there is an error in deserializing the API response.
-    pub async fn defer_ephemeral(&self, cache_http: impl CacheHttp) -> Result<()> {
+    pub async fn defer_ephemeral(&self, http: &Http) -> Result<()> {
         let builder = CreateInteractionResponse::Defer(
             CreateInteractionResponseMessage::new().ephemeral(true),
         );
-        self.create_response(cache_http, builder).await
-    }
-
-    /// See [`CreateQuickModal`].
-    ///
-    /// # Errors
-    ///
-    /// See [`CreateQuickModal::execute()`].
-    #[cfg(all(feature = "collector", feature = "utils"))]
-    pub async fn quick_modal(
-        &self,
-        ctx: &Context,
-        builder: CreateQuickModal,
-    ) -> Result<Option<QuickModalResponse>> {
-        builder.execute(ctx, self.id, &self.token).await
+        self.create_response(http, builder).await
     }
 }
 
@@ -260,7 +212,8 @@ impl<'de> Deserialize<'de> for CommandInteraction {
                 // If `member` is present, `user` wasn't sent and is still filled with default data
                 interaction.user = member.user.clone();
             }
-            interaction.data.resolved.roles.values_mut().for_each(|r| r.guild_id = guild_id);
+
+            interaction.data.resolved.roles.iter_mut().for_each(|r| r.guild_id = guild_id);
         }
         Ok(interaction)
     }
@@ -275,7 +228,7 @@ impl Serialize for CommandInteraction {
 
 /// The command data payload.
 ///
-/// [Discord docs](https://discord.com/developers/docs/interactions/receiving-and-responding#interaction-object-interaction-data-structure).
+/// [Discord docs](https://discord.com/developers/docs/interactions/receiving-and-responding#interaction-object-application-command-data-structure).
 #[cfg_attr(feature = "typesize", derive(typesize::derive::TypeSize))]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[non_exhaustive]
@@ -283,15 +236,16 @@ pub struct CommandData {
     /// The Id of the invoked command.
     pub id: CommandId,
     /// The name of the invoked command.
-    pub name: String,
+    pub name: FixedString,
     /// The application command type of the triggered application command.
     #[serde(rename = "type")]
     pub kind: CommandType,
-    /// The parameters and the given values. The converted objects from the given options.
+    /// The converted objects from the given options.
     #[serde(default)]
     pub resolved: CommandDataResolved,
+    /// The parameters and the given values.
     #[serde(default)]
-    pub options: Vec<CommandDataOption>,
+    pub options: FixedArray<CommandDataOption>,
     /// The Id of the guild the command is registered to.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guild_id: Option<GuildId>,
@@ -346,10 +300,10 @@ impl CommandData {
             for opt in opts {
                 let value = match &opt.value {
                     CommandDataOptionValue::SubCommand(opts) => {
-                        ResolvedValue::SubCommand(resolve_options(opts, resolved))
+                        ResolvedValue::SubCommand(resolve_options(opts, resolved).trunc_into())
                     },
                     CommandDataOptionValue::SubCommandGroup(opts) => {
-                        ResolvedValue::SubCommandGroup(resolve_options(opts, resolved))
+                        ResolvedValue::SubCommandGroup(resolve_options(opts, resolved).trunc_into())
                     },
                     CommandDataOptionValue::Autocomplete {
                         kind,
@@ -454,10 +408,10 @@ pub enum ResolvedValue<'a> {
     Integer(i64),
     Number(f64),
     String(&'a str),
-    SubCommand(Vec<ResolvedOption<'a>>),
-    SubCommandGroup(Vec<ResolvedOption<'a>>),
+    SubCommand(FixedArray<ResolvedOption<'a>>),
+    SubCommandGroup(FixedArray<ResolvedOption<'a>>),
     Attachment(&'a Attachment),
-    Channel(&'a PartialChannel),
+    Channel(&'a GenericInteractionChannel),
     Role(&'a Role),
     User(&'a User, Option<&'a PartialMember>),
     Unresolved(Unresolved),
@@ -468,7 +422,7 @@ pub enum ResolvedValue<'a> {
 #[non_exhaustive]
 pub enum Unresolved {
     Attachment(AttachmentId),
-    Channel(ChannelId),
+    Channel(GenericChannelId),
     Mentionable(GenericId),
     RoleId(RoleId),
     User(UserId),
@@ -493,23 +447,44 @@ pub enum ResolvedTarget<'a> {
 #[non_exhaustive]
 pub struct CommandDataResolved {
     /// The resolved users.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub users: HashMap<UserId, User>,
+    #[serde(
+        default,
+        skip_serializing_if = "ExtractMap::is_empty",
+        serialize_with = "extract_map::serialize_as_map"
+    )]
+    pub users: ExtractMap<UserId, User>,
     /// The resolved partial members.
+    // Cannot use ExtractMap, as PartialMember does not always store an ID.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub members: HashMap<UserId, PartialMember>,
     /// The resolved roles.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub roles: HashMap<RoleId, Role>,
+    #[serde(
+        default,
+        skip_serializing_if = "ExtractMap::is_empty",
+        serialize_with = "extract_map::serialize_as_map"
+    )]
+    pub roles: ExtractMap<RoleId, Role>,
     /// The resolved partial channels.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub channels: HashMap<ChannelId, PartialChannel>,
+    #[serde(
+        default,
+        skip_serializing_if = "ExtractMap::is_empty",
+        serialize_with = "extract_map::serialize_as_map"
+    )]
+    pub channels: ExtractMap<GenericChannelId, GenericInteractionChannel>,
     /// The resolved messages.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub messages: HashMap<MessageId, Message>,
+    #[serde(
+        default,
+        skip_serializing_if = "ExtractMap::is_empty",
+        serialize_with = "extract_map::serialize_as_map"
+    )]
+    pub messages: ExtractMap<MessageId, Message>,
     /// The resolved attachments.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub attachments: HashMap<AttachmentId, Attachment>,
+    #[serde(
+        default,
+        skip_serializing_if = "ExtractMap::is_empty",
+        serialize_with = "extract_map::serialize_as_map"
+    )]
+    pub attachments: ExtractMap<AttachmentId, Attachment>,
 }
 
 /// A set of a parameter and a value from the user.
@@ -526,7 +501,7 @@ pub struct CommandDataResolved {
 #[non_exhaustive]
 pub struct CommandDataOption {
     /// The name of the parameter.
-    pub name: String,
+    pub name: FixedString,
     /// The given value.
     pub value: CommandDataOptionValue,
 }
@@ -540,11 +515,11 @@ impl CommandDataOption {
 
 #[derive(Deserialize, Serialize)]
 struct RawCommandDataOption {
-    name: String,
+    name: FixedString,
     #[serde(rename = "type")]
     kind: CommandOptionType,
     #[serde(skip_serializing_if = "Option::is_none")]
-    value: Option<json::Value>,
+    value: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     options: Option<Vec<RawCommandDataOption>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -554,8 +529,8 @@ struct RawCommandDataOption {
 fn option_from_raw(raw: RawCommandDataOption) -> Result<CommandDataOption> {
     macro_rules! value {
         () => {{
-            json::from_value(
-                raw.value.ok_or_else::<JsonError, _>(|| DeError::missing_field("value"))?,
+            serde_json::from_value(
+                raw.value.ok_or_else(|| serde_json::Error::missing_field("value"))?,
             )?
         }};
     }
@@ -570,23 +545,21 @@ fn option_from_raw(raw: RawCommandDataOption) -> Result<CommandDataOption> {
         CommandOptionType::Number => CommandDataOptionValue::Number(value!()),
         CommandOptionType::String => CommandDataOptionValue::String(value!()),
         CommandOptionType::SubCommand => {
-            let options =
-                raw.options.ok_or_else::<JsonError, _>(|| DeError::missing_field("options"))?;
+            let options = raw.options.ok_or_else(|| serde_json::Error::missing_field("options"))?;
             let options = options.into_iter().map(option_from_raw).collect::<Result<_>>()?;
-            CommandDataOptionValue::SubCommand(options)
+            CommandDataOptionValue::SubCommand(FixedArray::from_vec_trunc(options))
         },
         CommandOptionType::SubCommandGroup => {
-            let options =
-                raw.options.ok_or_else::<JsonError, _>(|| DeError::missing_field("options"))?;
+            let options = raw.options.ok_or_else(|| serde_json::Error::missing_field("options"))?;
             let options = options.into_iter().map(option_from_raw).collect::<Result<_>>()?;
-            CommandDataOptionValue::SubCommandGroup(options)
+            CommandDataOptionValue::SubCommandGroup(FixedArray::from_vec_trunc(options))
         },
         CommandOptionType::Attachment => CommandDataOptionValue::Attachment(value!()),
         CommandOptionType::Channel => CommandDataOptionValue::Channel(value!()),
         CommandOptionType::Mentionable => CommandDataOptionValue::Mentionable(value!()),
         CommandOptionType::Role => CommandDataOptionValue::Role(value!()),
         CommandOptionType::User => CommandDataOptionValue::User(value!()),
-        CommandOptionType::Unknown(unknown) => CommandDataOptionValue::Unknown(unknown),
+        CommandOptionType(unknown) => CommandDataOptionValue::Unknown(unknown),
     };
 
     Ok(CommandDataOption {
@@ -609,21 +582,21 @@ fn option_to_raw(option: &CommandDataOption) -> Result<RawCommandDataOption> {
             kind: _,
             value,
         } => {
-            raw.value = Some(json::to_value(value)?);
+            raw.value = Some(serde_json::to_value(value)?);
             raw.focused = Some(true);
         },
-        CommandDataOptionValue::Boolean(v) => raw.value = Some(json::to_value(v)?),
-        CommandDataOptionValue::Integer(v) => raw.value = Some(json::to_value(v)?),
-        CommandDataOptionValue::Number(v) => raw.value = Some(json::to_value(v)?),
-        CommandDataOptionValue::String(v) => raw.value = Some(json::to_value(v)?),
+        CommandDataOptionValue::Boolean(v) => raw.value = Some(serde_json::to_value(v)?),
+        CommandDataOptionValue::Integer(v) => raw.value = Some(serde_json::to_value(v)?),
+        CommandDataOptionValue::Number(v) => raw.value = Some(serde_json::to_value(v)?),
+        CommandDataOptionValue::String(v) => raw.value = Some(serde_json::to_value(v)?),
         CommandDataOptionValue::SubCommand(o) | CommandDataOptionValue::SubCommandGroup(o) => {
             raw.options = Some(o.iter().map(option_to_raw).collect::<Result<_>>()?);
         },
-        CommandDataOptionValue::Attachment(v) => raw.value = Some(json::to_value(v)?),
-        CommandDataOptionValue::Channel(v) => raw.value = Some(json::to_value(v)?),
-        CommandDataOptionValue::Mentionable(v) => raw.value = Some(json::to_value(v)?),
-        CommandDataOptionValue::Role(v) => raw.value = Some(json::to_value(v)?),
-        CommandDataOptionValue::User(v) => raw.value = Some(json::to_value(v)?),
+        CommandDataOptionValue::Attachment(v) => raw.value = Some(serde_json::to_value(v)?),
+        CommandDataOptionValue::Channel(v) => raw.value = Some(serde_json::to_value(v)?),
+        CommandDataOptionValue::Mentionable(v) => raw.value = Some(serde_json::to_value(v)?),
+        CommandDataOptionValue::Role(v) => raw.value = Some(serde_json::to_value(v)?),
+        CommandDataOptionValue::User(v) => raw.value = Some(serde_json::to_value(v)?),
         CommandDataOptionValue::Unknown(_) => {},
     }
 
@@ -650,15 +623,15 @@ impl Serialize for CommandDataOption {
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum CommandDataOptionValue {
-    Autocomplete { kind: CommandOptionType, value: String },
+    Autocomplete { kind: CommandOptionType, value: FixedString },
     Boolean(bool),
     Integer(i64),
     Number(f64),
-    String(String),
-    SubCommand(Vec<CommandDataOption>),
-    SubCommandGroup(Vec<CommandDataOption>),
+    String(FixedString),
+    SubCommand(FixedArray<CommandDataOption>),
+    SubCommandGroup(FixedArray<CommandDataOption>),
     Attachment(AttachmentId),
-    Channel(ChannelId),
+    Channel(GenericChannelId),
     Mentionable(GenericId),
     Role(RoleId),
     User(UserId),
@@ -737,7 +710,7 @@ impl CommandDataOptionValue {
 
     /// If the value is an `ChannelId`, returns the associated ID. Returns None otherwise.
     #[must_use]
-    pub fn as_channel_id(&self) -> Option<ChannelId> {
+    pub fn as_channel_id(&self) -> Option<GenericChannelId> {
         match self {
             Self::Channel(id) => Some(*id),
             _ => None,
@@ -812,20 +785,28 @@ impl From<TargetId> for UserId {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
-    use crate::json::{assert_json, json};
+    use crate::model::utils::assert_json;
 
     #[test]
     fn nested_options() {
         let value = CommandDataOption {
-            name: "subcommand_group".into(),
-            value: CommandDataOptionValue::SubCommandGroup(vec![CommandDataOption {
-                name: "subcommand".into(),
-                value: CommandDataOptionValue::SubCommand(vec![CommandDataOption {
-                    name: "channel".into(),
-                    value: CommandDataOptionValue::Channel(ChannelId::new(3)),
-                }]),
-            }]),
+            name: FixedString::from_static_trunc("subcommand_group"),
+            value: CommandDataOptionValue::SubCommandGroup(
+                vec![CommandDataOption {
+                    name: FixedString::from_static_trunc("subcommand"),
+                    value: CommandDataOptionValue::SubCommand(
+                        vec![CommandDataOption {
+                            name: FixedString::from_static_trunc("channel"),
+                            value: CommandDataOptionValue::Channel(GenericChannelId::new(3)),
+                        }]
+                        .trunc_into(),
+                    ),
+                }]
+                .trunc_into(),
+            ),
         };
 
         assert_json(
@@ -846,30 +827,30 @@ mod tests {
     fn mixed_options() {
         let value = vec![
             CommandDataOption {
-                name: "boolean".into(),
+                name: FixedString::from_static_trunc("boolean"),
                 value: CommandDataOptionValue::Boolean(true),
             },
             CommandDataOption {
-                name: "integer".into(),
+                name: FixedString::from_static_trunc("integer"),
                 value: CommandDataOptionValue::Integer(1),
             },
             CommandDataOption {
-                name: "number".into(),
+                name: FixedString::from_static_trunc("number"),
                 value: CommandDataOptionValue::Number(2.0),
             },
             CommandDataOption {
-                name: "string".into(),
-                value: CommandDataOptionValue::String("foobar".into()),
+                name: FixedString::from_static_trunc("string"),
+                value: CommandDataOptionValue::String(FixedString::from_static_trunc("foobar")),
             },
             CommandDataOption {
-                name: "empty_subcommand".into(),
-                value: CommandDataOptionValue::SubCommand(vec![]),
+                name: FixedString::from_static_trunc("empty_subcommand"),
+                value: CommandDataOptionValue::SubCommand(FixedArray::default()),
             },
             CommandDataOption {
-                name: "autocomplete".into(),
+                name: FixedString::from_static_trunc("autocomplete"),
                 value: CommandDataOptionValue::Autocomplete {
                     kind: CommandOptionType::Integer,
-                    value: "not an integer".into(),
+                    value: FixedString::from_static_trunc("not an integer"),
                 },
             },
         ];
